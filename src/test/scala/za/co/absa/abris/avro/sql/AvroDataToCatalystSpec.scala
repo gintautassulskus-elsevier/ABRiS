@@ -16,16 +16,20 @@
 
 package za.co.absa.abris.avro.sql
 
-import org.apache.spark.sql.SparkSession
+import org.apache.spark.SparkException
 import org.apache.spark.sql.functions.col
-import org.scalatest.flatspec.AnyFlatSpec
+import org.apache.spark.sql.{DataFrame, Encoder, Row, SparkSession}
 import org.scalatest.BeforeAndAfterEach
+import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
+import za.co.absa.abris.avro.errors.{DefaultExceptionHandler, EmptyExceptionHandler}
 import za.co.absa.abris.avro.functions._
+import za.co.absa.abris.avro.utils.AvroSchemaEncoder
 import za.co.absa.abris.config.{AbrisConfig, FromAvroConfig}
 import za.co.absa.abris.examples.data.generation.TestSchemas
 
 class AvroDataToCatalystSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEach {
+
   private val spark = SparkSession
     .builder()
     .appName("unitTest")
@@ -34,7 +38,11 @@ class AvroDataToCatalystSpec extends AnyFlatSpec with Matchers with BeforeAndAft
     .config("spark.ui.enabled", "false")
     .getOrCreate()
 
+  private val avroSchemaEncoder = new AvroSchemaEncoder
+
   import spark.implicits._
+
+  implicit val encoder: Encoder[Row] = avroSchemaEncoder.getEncoder
 
 
   it should "not print schema registry configs in the spark plan" in {
@@ -53,4 +61,43 @@ class AvroDataToCatalystSpec extends AnyFlatSpec with Matchers with BeforeAndAft
     column.expr.toString() should not include sensitiveData
   }
 
+
+  it should "throw a spark exception" in {
+
+    val rowData = "$£%^"
+    val data = Seq(Row(rowData.getBytes()))
+    val dataFrame: DataFrame = spark.sparkContext.parallelize(data, 2).toDF() as "bytes"
+
+    val schemaString = TestSchemas.NATIVE_SIMPLE_NESTED_SCHEMA
+    val dummyUrl = "dummyUrl"
+
+    val fromConfig = AbrisConfig
+      .fromConfluentAvro
+      .provideReaderSchema(schemaString)
+      .usingSchemaRegistry(dummyUrl)
+      .withExceptionHandler(new DefaultExceptionHandler)
+
+        the[SparkException] thrownBy dataFrame.select(from_avro(col("bytes"), fromConfig )).collect()
+  }
+
+  it should "receive empty dataframe row back" in {
+
+    val rowData = "$£%^"
+    val data = Seq(Row(rowData.getBytes()))
+    val dataFrame: DataFrame = spark.sparkContext.parallelize(data, 2).toDF() as "bytes"
+
+    val schemaString = TestSchemas.NATIVE_SIMPLE_NESTED_SCHEMA
+    val dummyUrl = "dummyUrl"
+    val deserializationExceptionHandler = new EmptyExceptionHandler
+
+    val fromConfig = AbrisConfig
+      .fromConfluentAvro
+      .provideReaderSchema(schemaString)
+      .usingSchemaRegistry(dummyUrl)
+      .withExceptionHandler(deserializationExceptionHandler)
+
+    val expectedResult = Array(Row(Row(0, 0)))
+
+    assert(dataFrame.select(from_avro(col("bytes"), fromConfig)).collect() sameElements expectedResult)
+  }
 }
