@@ -1,4 +1,4 @@
-
+Archived. Supercedd by Version 6.3.0 of ABRiS (https://github.com/AbsaOSS/ABRiS/pull/290).
 
 # ABRiS - Avro Bridge for Spark
 
